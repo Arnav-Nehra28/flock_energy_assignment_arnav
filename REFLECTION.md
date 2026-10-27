@@ -1,66 +1,55 @@
-# Engineering Reflection
+# Reflection
 
-Answers to the evaluation reflection questions for the Flock Energy Take-Home Assignment.
+Answers to the take-home reflection prompts.
 
 ---
 
 ### 1. What assumptions did you make?
 
-1. **Read-Only Invariance**: We assumed the underlying Urja portal data is fundamentally read-only from an external perspective. Operations staff consult it; changes are infrequent enough that short-term caching (5–10 minutes) provides high performance without serving meaningfully stale data.
-2. **Fixed Bulk Scope**: The `/portal/export` endpoint accepts `page=1` and currently dumps all 403 meters in a single JSON payload. We assumed that in production with tens of thousands of meters, the portal backend might eventually paginate this or stream NDJSON, but currently it serves as a reliable bulk sync mechanism.
-3. **Session Lifetime**: We observed the `__Secure-better-auth.session_token` cookie carries `Max-Age=3600` (1 hour). We assumed that proactive token refresh with a 60-second safety margin (and a fallback re-auth on HTTP 401) is sufficient to maintain uninterrupted uptime across long-running worker processes.
-4. **Timezone Context**: The portal provides energy timestamps in the format `DD/MM/YYYY HH:mm` without timezone offsets. Because the meters are located in Jaipur (Rajasthan, India), we converted these to standard ISO-8601 strings assuming Indian Standard Time (IST / UTC+05:30).
+1. **Read-only workload**: The task instructions specified treating the portal as read-only. I assumed the data is operational snapshot data where a 5 to 10-minute cache TTL on lists and exports is completely acceptable for downstream consumers.
+2. **Bulk export coverage**: Calling `GET /portal/export?page=1` currently returns all 403 meters in one payload despite having a page query parameter. I assumed this bulk endpoint is the intended source of truth for full-fleet synchronization, rather than paginating through the search endpoint 20 items at a time.
+3. **Session lifetime**: The `__Secure-better-auth.session_token` cookie specifies a `Max-Age` of 3600 seconds (1 hour). I assumed tracking token age with a 60-second buffer plus catching 401 status codes to re-authenticate is sufficient for resilient long-running client sessions.
+4. **Timezone**: Energy readings contain timestamps in `DD/MM/YYYY HH:mm` format with no timezone offset specified. Given the meters are located in Jaipur (Rajasthan), I parsed them into ISO-8601 assuming local Indian Standard Time (IST).
 
 ---
 
 ### 2. Which part was the most difficult, and how did you get unstuck?
 
-**The most difficult part was discovering and reverse-engineering the bulk export signature mechanism.**
+The most challenging part was figuring out how the bulk export on the Transformers page worked.
 
-When examining the Distribution Transformers page in the portal, there was an "Export all meters" button. Inspecting the network requests and decompiling the client JavaScript bundles revealed that:
-1. It wasn't calling a standard REST query with a bearer token.
-2. It called an obscure endpoint `/portal/keys` which returned a `signingSecret`.
-3. It constructed a multi-line message: `METHOD\nPATH\nQUERY\nTIMESTAMP`.
-4. It signed the string using HMAC-SHA256 in WebCrypto (`crypto.subtle`) and sent the result via `x-timestamp` and `x-signature` headers.
+Clicking "Export all meters" in the browser initiated a request to `/portal/export?page=1` that included two custom headers: `x-timestamp` and `x-signature`. Calling that endpoint directly with just the session cookie returned an unauthorized/forbidden response.
 
-**How we got unstuck**:
-Rather than guessing parameter combinations or trying to brute-force the API, we extracted the SvelteKit compiled asset (`nodes/4.2Bgc2kUI.js`). By formatting the minified code, we isolated the function `C(e, t, n, r)` which explicitly implemented the WebCrypto HMAC-SHA256 signing algorithm. We reproduced this signing scheme in Python using `hmac` and `hashlib.sha256`, which immediately unlocked the entire enriched dataset of 403 meters.
+To solve this, I pulled the SvelteKit frontend bundle from `_app/immutable/nodes/4.2Bgc2kUI.js` and searched for the export request handler. I found a signing helper `C(e, t, n, r)` calling `crypto.subtle.sign("HMAC", ...)` using a key fetched from `GET /portal/keys`. The signature string was constructed as:
+```
+METHOD\nPATH\nQUERY\nTIMESTAMP
+```
+Once I saw the format, I reproduced the HMAC-SHA256 generation using Python's standard `hmac` and `hashlib` libraries. That unlocked the bulk export endpoint immediately.
 
 ---
 
 ### 3. If you had another day, what would you improve?
 
-1. **Persistent Geospatial & Search Index (PostGIS / SQLite with R*Tree)**:
-   Currently, geo queries and attribute filters run in-memory over the cached export dataset. While this executes in sub-millisecond time for 403 meters, at 100,000+ meters it would degrade CPU and memory. We would introduce SQLite with R*Tree indexing or PostgreSQL/PostGIS to support bounding box queries ("meters within 5km of coordinates X, Y") and fast indexed faceted search.
-2. **Streaming & Webhooks / Change Data Capture**:
-   Instead of on-demand portal polling, a background sync worker could periodically hash the export payload, detect newly installed/faulty meters or status transitions, and emit webhook events to downstream microservices.
-3. **Comprehensive Visual Dashboard**:
-   A lightweight, reactive dashboard (e.g. built with React/Vite or SvelteKit + Leaflet) displaying a live map of meters colored by status (faulty vs installed), transformer load aggregations, and interactive consumption time-series charts.
-4. **Rate Limiting & Resilient Backoff Circuit Breaker**:
-   Add a circuit breaker (e.g., using `tenacity` or `pybreaker`) that prevents slamming the legacy portal if it becomes degraded or experiences downtime.
+1. **Persistent storage & geospatial queries**: While an in-memory cache is fast and simple for 403 meters, at 100,000+ meters in-memory filtering falls apart. I would back the service with PostgreSQL + PostGIS (or SQLite with spatialite/R*Tree) to enable real radius and polygon queries (e.g., "find all faulty meters within 2 km of substation X").
+2. **Consumption delta calculations**: The portal's `/portal/meters/{id}/energy` endpoint gives cumulative register readings (total lifetime kWh). For downstream analytics, calculating the delta $\Delta\text{kWh}$ between consecutive 30-minute intervals would be much more practical.
+3. **Background synchronization worker**: Instead of waiting for a user request to trigger the HMAC export, a lightweight background task could refresh the cache on a timer (e.g., every 15 minutes) so client requests are always served instantaneously from local memory or Redis.
+4. **Resilience / Circuit Breaker**: If the legacy portal has downtime or slow response times, adding retries with exponential backoff and a circuit breaker would prevent cascading failures in client services.
 
 ---
 
 ### 4. What mistake did you make while solving this (there's always one)?
 
-**Mistake:**
-During initial exploration of the `/login` route, we attempted a direct `curl -X POST /login` with username and password, expecting standard session cookies. Instead, the server responded with:
-`403 Forbidden: Cross-site POST form submissions are forbidden`.
+When first testing the login endpoint via `curl -X POST https://urja-ops.flockenergy.tech/login`, I was greeted with:
+```
+403 Forbidden: Cross-site POST form submissions are forbidden
+```
+For a few minutes I thought there might be a hidden CSRF token in an input field or a cookie handshake step I had missed. After checking SvelteKit's standard form action behavior, I realized SvelteKit validates the HTTP `Origin` header against the host. Adding `Origin: https://urja-ops.flockenergy.tech` to the request fixed it right away and returned the session cookie.
 
-We initially wondered whether there was an undocumented CSRF token hidden in the HTML DOM or a cookie handshake requirement. 
-
-**Fix:**
-After reviewing SvelteKit's built-in CSRF protection specifications, we realized SvelteKit validates the HTTP `Origin` header on all form actions. As soon as we included `Origin: https://urja-ops.flockenergy.tech`, authentication succeeded immediately and returned the Better Auth session token.
-
-Another minor pitfall was discovering that the portal detail page serves two different data schemas: older meters use a flat array of `{parameterName, parameterValue}` pairs (`build: legacy`), whereas newer meters serialize nameplate data into a stringified JSON object named `classData` (`build: v2`). Early versions of our detail parser crashed on v2 meters until we inspected both schemas and added polymorphic deserialization.
+Another catch was that meter detail schemas are not consistent across the fleet. Meters with `build: "legacy"` use a flat array of `{parameterName, parameterValue}` objects, whereas newer meters with `build: "v2"` store their attributes in a JSON-encoded string inside a `classData` field. My initial parser broke on the v2 meters until I inspected `J100004` and added handling for both formats.
 
 ---
 
 ### 5. If you were reviewing your own submission, what would you criticise?
 
-1. **In-Memory Cache vs. Distributed Storage**:
-   The current cache (`TTLCache`) lives in Python process memory. If the FastAPI application is scaled horizontally behind a round-robin load balancer across multiple containers or workers, each worker maintains its own portal session and cache, leading to duplicated login calls and cache fragmentation. In production, Redis or Memcached should back the caching and distributed session locks.
-2. **Coupling to SvelteKit Internal Routing**:
-   The single-meter detail endpoint fetches `/meters/{meter_id}/__data.json` directly from SvelteKit's internal server-rendered JSON endpoints. While this allows pulling hierarchy and nameplate data for individual meters without running a full bulk export, SvelteKit positional data formats can change during framework updates. A cleaner architectural alternative for single-meter lookup is serving it directly from the cached bulk export dataset.
-3. **Missing Delta Calculation for Energy Readings**:
-   The energy readings returned by `/portal/meters/{id}/energy` are raw cumulative meter register values (e.g., total kWh: 48,438.74). The API normalizes the timestamps and types, but does not calculate interval deltas (kWh consumed during that specific 30-minute window). Providing computed interval consumption alongside raw registers would be much more immediately usable for analytics teams.
+1. **In-memory cache in single process**: Using an in-memory dictionary for caching means multiple Uvicorn worker processes will each maintain their own cache and authenticate separately. In a multi-worker production deployment, this should be backed by Redis.
+2. **Coupling single meter detail to SvelteKit `__data.json`**: For individual meter lookups, the service calls `/meters/{id}/__data.json`, which is an internal SvelteKit SSR data route. If the frontend developers modify their route structure or SvelteKit updates its internal encoding, this route could change. A safer approach would be to populate single-meter details directly from the bulk export cache.
+3. **Absence of interval consumption deltas**: As noted earlier, the API returns the portal's raw cumulative kWh and kVAh numbers. While typed and validated, it would be much more useful to data consumers if the API calculated the per-interval consumption.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -12,7 +13,10 @@ from app.models import (
     MeterDetail,
     PaginatedResponse,
 )
+from app.portal_client import PortalNotFoundError
 from app.services import meter_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/meters", tags=["Meters"])
 
@@ -61,15 +65,18 @@ async def export_meters(
     summary="Get meter detail",
     description=(
         "Returns full detail for a single meter: nameplate data, "
-        "network hierarchy (Zone → Circle → Division → Subdivision → "
-        "Substation → Feeder → DT), and geographic location."
+        "network hierarchy (Zone -> Circle -> Division -> Subdivision -> "
+        "Substation -> Feeder -> DT), and geographic location."
     ),
 )
 async def get_meter(meter_id: str):
     try:
         return await meter_service.get_meter_detail(meter_id)
-    except Exception as exc:
+    except PortalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Meter {meter_id} not found") from exc
+    except Exception as exc:
+        logger.exception("Unexpected error retrieving meter %s", meter_id)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get(
@@ -81,8 +88,11 @@ async def get_meter(meter_id: str):
 async def get_meter_location(meter_id: str):
     try:
         return await meter_service.get_meter_location(meter_id)
-    except Exception as exc:
+    except PortalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Location not found for meter {meter_id}") from exc
+    except Exception as exc:
+        logger.exception("Unexpected error retrieving location for %s", meter_id)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get(
@@ -98,9 +108,12 @@ async def get_meter_location(meter_id: str):
 async def get_meter_consumption(meter_id: str):
     try:
         return await meter_service.get_meter_consumption(meter_id)
-    except Exception as exc:
+    except PortalNotFoundError as exc:
         raise HTTPException(
             status_code=404,
             detail=f"Consumption data not found for meter {meter_id}",
         ) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error retrieving consumption for %s", meter_id)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 

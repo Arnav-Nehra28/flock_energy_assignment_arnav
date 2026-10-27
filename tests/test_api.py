@@ -92,6 +92,19 @@ async def test_export_and_filtering(client):
 
 
 @pytest.mark.asyncio
+async def test_meter_not_found(client):
+    # Non-existent meter should return 404 across detail, location, and consumption
+    res_detail = await client.get("/api/meters/J999999")
+    assert res_detail.status_code == 404
+
+    res_loc = await client.get("/api/meters/J999999/location")
+    assert res_loc.status_code == 404
+
+    res_cons = await client.get("/api/meters/J999999/consumption")
+    assert res_cons.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_hierarchy_tree(client):
     response = await client.get("/api/hierarchy")
     assert response.status_code == 200

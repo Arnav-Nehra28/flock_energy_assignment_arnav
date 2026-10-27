@@ -25,6 +25,10 @@ class PortalAuthError(Exception):
     """Raised when portal authentication fails."""
 
 
+class PortalNotFoundError(Exception):
+    """Raised when a requested resource is not found (404)."""
+
+
 class PortalRequestError(Exception):
     """Raised when a portal request fails unexpectedly."""
 
@@ -146,6 +150,8 @@ class PortalClient:
                 path,
                 params=params,
             )
+        if resp.status_code == 404:
+            raise PortalNotFoundError(f"Resource {path} not found on portal")
         if resp.status_code != 200:
             raise PortalRequestError(
                 f"GET {path} returned {resp.status_code}: {resp.text[:200]}"

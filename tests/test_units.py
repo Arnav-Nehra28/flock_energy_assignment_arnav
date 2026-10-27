@@ -108,3 +108,4 @@ def test_hmac_computation():
     ts, sig = client._compute_hmac("GET", "/portal/export", "page=1", secret)
     assert len(sig) == 64  # SHA256 hex digest length
     assert ts.isdigit()
+

@@ -23,7 +23,7 @@ from app.models import (
     HierarchyTreeNode,
     PaginatedResponse,
 )
-from app.portal_client import portal_client
+from app.portal_client import PortalNotFoundError, portal_client
 from app.services.cache import cache
 
 logger = logging.getLogger(__name__)
@@ -84,10 +84,23 @@ def _decode_sveltekit_data(nodes: list) -> dict:
     SvelteKit uses a positional encoding where objects reference values
     by index in a flat array. This recursively resolves references.
     """
+    if len(nodes) < 3:
+        raise PortalNotFoundError("Incomplete SvelteKit response")
+
     detail_node = nodes[2]  # Index 2 is the page-specific data node
-    if not detail_node or detail_node.get("type") != "data":
-        return {}
-    flat = detail_node["data"]
+    if not detail_node:
+        raise PortalNotFoundError("Empty page data node")
+
+    if detail_node.get("type") == "error":
+        msg = detail_node.get("error", {}).get("message", "Meter not found")
+        raise PortalNotFoundError(msg)
+
+    if detail_node.get("type") != "data":
+        raise PortalNotFoundError("Expected data node")
+
+    flat = detail_node.get("data", [])
+    if not flat:
+        raise PortalNotFoundError("Empty node data")
     root = flat[0]  # The root object with index references
 
     def resolve(ref: Any) -> Any:
@@ -240,6 +253,8 @@ async def get_meter_location(meter_id: str) -> GeoLocation:
 
     raw = await portal_client.get_meter_geo(meter_id)
     geo = raw.get("data", {})
+    if not geo or "latitude" not in geo or "longitude" not in geo:
+        raise PortalNotFoundError(f"Location not found for meter {meter_id}")
     location = GeoLocation(
         latitude=float(geo["latitude"]),
         longitude=float(geo["longitude"]),

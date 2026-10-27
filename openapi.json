@@ -193,7 +193,7 @@
           "Meters"
         ],
         "summary": "Get meter detail",
-        "description": "Returns full detail for a single meter: nameplate data, network hierarchy (Zone \u2192 Circle \u2192 Division \u2192 Subdivision \u2192 Substation \u2192 Feeder \u2192 DT), and geographic location.",
+        "description": "Returns full detail for a single meter: nameplate data, network hierarchy (Zone -> Circle -> Division -> Subdivision -> Substation -> Feeder -> DT), and geographic location.",
         "operationId": "get_meter_api_meters__meter_id__get",
         "parameters": [
           {

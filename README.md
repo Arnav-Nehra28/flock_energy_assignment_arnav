@@ -327,16 +327,17 @@ curl -s http://localhost:8000/api/hierarchy | jq '.[0] | {name, code, meter_coun
 
 ## What Was Intentionally Skipped
 
-1. **Write / Mutation Operations**: The assignment explicitly directed that the legacy portal be treated as read-only. We did not probe or expose any update/write operations.
-2. **Persistent RDBMS / Database Layer**: We avoided requiring PostgreSQL, MongoDB, or Redis to ensure any reviewer can clone the repository and run `pytest` or `uvicorn` in under 30 seconds with no background services.
+1. **Write / Mutation Operations**: The assignment explicitly directed that the legacy portal be treated as read-only. I did not probe or expose any update/write operations.
+2. **Persistent RDBMS / Database Layer**: I avoided requiring PostgreSQL, MongoDB, or Redis so any reviewer can clone the repository and run `pytest` or `uvicorn` in under 30 seconds with zero external background dependencies.
 3. **Complex Geospatial Indexing (R*Tree / PostGIS)**: For 403 meters, in-memory array filtering executes in $<1$ ms. Full GIS indexing was omitted as premature optimization.
 
 ---
 
 ## Reflection Summary
 
-*(Full text in [`REFLECTION.md`](REFLECTION.md))*
+*(Full write-up in [`REFLECTION.md`](REFLECTION.md))*
 
-- **Hardest Part**: Cracking the HMAC-SHA256 signature required for the `/portal/export` endpoint by decompiling the minified client bundle `nodes/4.2Bgc2kUI.js`.
-- **Mistake Made**: SvelteKit initially rejected form POST logins with `403 Forbidden` until we determined it strictly enforces the HTTP `Origin` header for CSRF protection.
-- **Key Self-Critique**: In-memory caching should be backed by Redis in production to prevent repeated portal logins across multi-worker clusters. Additionally, interval consumption readings should compute deltas ($\Delta \text{kWh}$) rather than only presenting cumulative meter registers.
+- **Hardest Part**: Cracking the HMAC-SHA256 signature required for `/portal/export` by inspecting the client bundle `nodes/4.2Bgc2kUI.js`.
+- **Mistake Made**: SvelteKit rejected initial form POST logins with `403 Forbidden` until I added the HTTP `Origin` header required for CSRF validation.
+- **Key Self-Critique**: In production, the in-memory cache should be backed by Redis to prevent redundant portal logins across multi-worker clusters. Also, interval consumption readings should calculate deltas ($\Delta\text{kWh}$) rather than only exposing cumulative meter registers.
+
