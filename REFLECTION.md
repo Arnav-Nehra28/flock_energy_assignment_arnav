@@ -1,55 +1,59 @@
 # Reflection
 
-Answers to the take-home reflection prompts.
+My notes and answers to the assignment reflection prompts.
 
 ---
 
 ### 1. What assumptions did you make?
 
-1. **Read-only workload**: The task instructions specified treating the portal as read-only. I assumed the data is operational snapshot data where a 5 to 10-minute cache TTL on lists and exports is completely acceptable for downstream consumers.
-2. **Bulk export coverage**: Calling `GET /portal/export?page=1` currently returns all 403 meters in one payload despite having a page query parameter. I assumed this bulk endpoint is the intended source of truth for full-fleet synchronization, rather than paginating through the search endpoint 20 items at a time.
-3. **Session lifetime**: The `__Secure-better-auth.session_token` cookie specifies a `Max-Age` of 3600 seconds (1 hour). I assumed tracking token age with a 60-second buffer plus catching 401 status codes to re-authenticate is sufficient for resilient long-running client sessions.
-4. **Timezone**: Energy readings contain timestamps in `DD/MM/YYYY HH:mm` format with no timezone offset specified. Given the meters are located in Jaipur (Rajasthan), I parsed them into ISO-8601 assuming local Indian Standard Time (IST).
+1. **Read-only access**: The prompt specified treating the portal as read-only. I assumed meter operational data changes relatively slowly, so caching lists and bulk snapshots for 5 to 10 minutes in memory is a sensible balance between freshness and load on the legacy portal.
+2. **Bulk export as the source of truth**: Calling `GET /portal/export?page=1` dumps all 403 meters in a single JSON payload despite accepting a `page` query parameter. I assumed this bulk snapshot was intended to be the primary dataset for fleet sync, filtering, and hierarchy building, rather than crawling the search endpoint 20 items at a time.
+3. **Session handling**: The `__Secure-better-auth.session_token` cookie has a 1-hour `Max-Age`. I assumed tracking token age locally with a small buffer, plus catching any unexpected 401s to trigger a transparent re-login, is sufficient for continuous background uptime.
+4. **Timezone**: Energy readings use `DD/MM/YYYY HH:mm` with no timezone specified. Since the meters are in the Jaipur area, I parsed timestamps assuming Indian Standard Time (IST).
 
 ---
 
 ### 2. Which part was the most difficult, and how did you get unstuck?
 
-The most challenging part was figuring out how the bulk export on the Transformers page worked.
+The trickiest part was figuring out how the bulk export on the Transformers page worked.
 
-Clicking "Export all meters" in the browser initiated a request to `/portal/export?page=1` that included two custom headers: `x-timestamp` and `x-signature`. Calling that endpoint directly with just the session cookie returned an unauthorized/forbidden response.
+Clicking "Export all meters" in the browser initiated a request to `/portal/export?page=1`. When I tried copying the URL and hitting it via cURL with my session cookie, the server returned an unauthorized error. Looking closely at Chrome's Network tab, the browser was sending two extra request headers: `x-timestamp` and `x-signature`.
 
-To solve this, I pulled the SvelteKit frontend bundle from `_app/immutable/nodes/4.2Bgc2kUI.js` and searched for the export request handler. I found a signing helper `C(e, t, n, r)` calling `crypto.subtle.sign("HMAC", ...)` using a key fetched from `GET /portal/keys`. The signature string was constructed as:
+To figure out how the signature was generated, I opened the SvelteKit frontend chunk for that page (`nodes/4.2Bgc2kUI.js`), prettified it, and searched for `export`. I found a signing helper calling `crypto.subtle.sign("HMAC", ...)` using a secret retrieved from `/portal/keys`. The message format being signed was:
 ```
 METHOD\nPATH\nQUERY\nTIMESTAMP
 ```
-Once I saw the format, I reproduced the HMAC-SHA256 generation using Python's standard `hmac` and `hashlib` libraries. That unlocked the bulk export endpoint immediately.
+Once I had the exact string format and the endpoint providing the key, replicating it in Python with `hmac` and `hashlib.sha256` was straightforward and unlocked the full dataset.
 
 ---
 
 ### 3. If you had another day, what would you improve?
 
-1. **Persistent storage & geospatial queries**: While an in-memory cache is fast and simple for 403 meters, at 100,000+ meters in-memory filtering falls apart. I would back the service with PostgreSQL + PostGIS (or SQLite with spatialite/R*Tree) to enable real radius and polygon queries (e.g., "find all faulty meters within 2 km of substation X").
-2. **Consumption delta calculations**: The portal's `/portal/meters/{id}/energy` endpoint gives cumulative register readings (total lifetime kWh). For downstream analytics, calculating the delta $\Delta\text{kWh}$ between consecutive 30-minute intervals would be much more practical.
-3. **Background synchronization worker**: Instead of waiting for a user request to trigger the HMAC export, a lightweight background task could refresh the cache on a timer (e.g., every 15 minutes) so client requests are always served instantaneously from local memory or Redis.
-4. **Resilience / Circuit Breaker**: If the legacy portal has downtime or slow response times, adding retries with exponential backoff and a circuit breaker would prevent cascading failures in client services.
+1. **Database & spatial queries**: In-memory caching works great for 403 meters, but it wouldn't scale to a utility with hundreds of thousands of meters. I'd back this with PostgreSQL and PostGIS to support real geospatial queries (like finding all faulty meters within 3 km of a substation or polygon bounding boxes).
+2. **Consumption interval deltas**: Right now the API exposes the portal's raw cumulative meter readings (total lifetime kWh). For downstream billing or load analysis, computing the delta (consumption between consecutive 30-minute intervals) directly in the response would save consumers from doing the math themselves.
+3. **Background sync worker**: Instead of refreshing the cache lazily when a client request arrives, I'd set up a background scheduler (like APScheduler or Celery) to refresh the export snapshot periodically so client requests never experience a cache-miss latency penalty.
+4. **Circuit breaker & retries**: If the legacy portal has a blip or starts throttling, adding exponential backoff retries and a circuit breaker would prevent client requests from timing out or hanging.
 
 ---
 
 ### 4. What mistake did you make while solving this (there's always one)?
 
-When first testing the login endpoint via `curl -X POST https://urja-ops.flockenergy.tech/login`, I was greeted with:
+When I first tested the login endpoint with cURL:
+```bash
+curl -X POST https://urja-ops.flockenergy.tech/login -d "email=operator@urja.local&password=urja-ops-2026"
+```
+It immediately threw back:
 ```
 403 Forbidden: Cross-site POST form submissions are forbidden
 ```
-For a few minutes I thought there might be a hidden CSRF token in an input field or a cookie handshake step I had missed. After checking SvelteKit's standard form action behavior, I realized SvelteKit validates the HTTP `Origin` header against the host. Adding `Origin: https://urja-ops.flockenergy.tech` to the request fixed it right away and returned the session cookie.
+I spent about 15 minutes inspecting the login page HTML looking for a hidden CSRF input token or an initial cookie handshake that I might have missed. After checking SvelteKit's default form action security, I realized SvelteKit verifies the `Origin` header against the host. Adding `-H "Origin: https://urja-ops.flockenergy.tech"` solved it right away.
 
-Another catch was that meter detail schemas are not consistent across the fleet. Meters with `build: "legacy"` use a flat array of `{parameterName, parameterValue}` objects, whereas newer meters with `build: "v2"` store their attributes in a JSON-encoded string inside a `classData` field. My initial parser broke on the v2 meters until I inspected `J100004` and added handling for both formats.
+The second surprise was meter detail schemas. The first few meters I inspected (`J100000`, `J100001`) used a flat array of `{parameterName, parameterValue}` objects. But when testing across the full list, meter `J100004` caused the parser to fail because newer meters use `build: "v2"`, where attributes are packed inside a stringified JSON string under `classData`. I had to update the decoder to detect and unpack both formats.
 
 ---
 
 ### 5. If you were reviewing your own submission, what would you criticise?
 
-1. **In-memory cache in single process**: Using an in-memory dictionary for caching means multiple Uvicorn worker processes will each maintain their own cache and authenticate separately. In a multi-worker production deployment, this should be backed by Redis.
-2. **Coupling single meter detail to SvelteKit `__data.json`**: For individual meter lookups, the service calls `/meters/{id}/__data.json`, which is an internal SvelteKit SSR data route. If the frontend developers modify their route structure or SvelteKit updates its internal encoding, this route could change. A safer approach would be to populate single-meter details directly from the bulk export cache.
-3. **Absence of interval consumption deltas**: As noted earlier, the API returns the portal's raw cumulative kWh and kVAh numbers. While typed and validated, it would be much more useful to data consumers if the API calculated the per-interval consumption.
+1. **In-memory cache across workers**: Using an in-memory dictionary cache means if you run Uvicorn with `--workers 4`, each worker maintains its own independent cache and auth session. In production, caching should use an external Redis instance.
+2. **Coupling to SvelteKit `__data.json`**: For individual meter lookups (`/meters/{id}`), the service fetches `/meters/{id}/__data.json`, which is an internal SvelteKit SSR data route. If the frontend maintainers change their routing structure, this route could break. A more resilient approach would be resolving individual meter details out of the cached bulk export snapshot.
+3. **Raw cumulative readings instead of deltas**: While the consumption endpoint cleans up timestamps and parses numbers to floats, it still returns cumulative lifetime kWh. Providing interval deltas would be much more practical for downstream consumers.

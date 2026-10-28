@@ -1,75 +1,81 @@
-# PROTOCOL.md — How the Urja Meter Ops Portal Actually Works
+# Urja Portal Reverse Engineering Notes
 
-This document describes the internal workings of the **Urja Meter Ops** portal at `https://urja-ops.flockenergy.tech`, as discovered through investigation.
-
----
-
-## Technology Stack
-
-| Layer | Technology |
-|---|---|
-| **Framework** | [SvelteKit](https://kit.svelte.dev/) (Svelte 5) with server-side rendering |
-| **Authentication** | [Better Auth](https://www.better-auth.com/) — cookie-based sessions |
-| **Hosting** | HTTPS with HTTP/2, `alt-svc: h3` (HTTP/3 ready) |
-| **Styling** | Tailwind CSS |
-
-The app is a SvelteKit application that renders server-side on first load, then hydrates into a client-side SPA. Data is fetched client-side via internal `/portal/*` JSON endpoints.
+These are my technical notes from reverse-engineering the **Urja Meter Ops** portal at `https://urja-ops.flockenergy.tech`.
 
 ---
 
-## Authentication
+## 1. Stack & Architecture
 
-### Login
+Looking at response headers, DOM markup, and network requests:
+- **Framework**: SvelteKit (Svelte 5) with server-side rendering (SSR) and client-side hydration.
+- **Auth Layer**: Better Auth (`__Secure-better-auth.session_token` cookie).
+- **Transport**: HTTPS with HTTP/2 (supports HTTP/3 via `alt-svc: h3`).
+- **Styling**: Tailwind CSS.
 
-- **Endpoint:** `POST /login`
-- **Content-Type:** `application/x-www-form-urlencoded`
-- **Body:** `email=operator%40urja.local&password=urja-ops-2026`
-- **CSRF Protection:** SvelteKit requires the `Origin` header to match the site origin. Without `Origin: https://urja-ops.flockenergy.tech`, the server returns `403 Cross-site POST form submissions are forbidden`.
+When a page loads, SvelteKit delivers initial HTML along with a JS bundle (`_app/immutable/...`). Subsequent navigation and data updates happen client-side using internal JSON endpoints under `/portal/*` and SvelteKit route data at `/__data.json`.
 
-### Session
+---
 
-- On successful login, the server sets a cookie:
+## 2. Authentication Flow
+
+### Login (`POST /login`)
+- **URL**: `https://urja-ops.flockenergy.tech/login`
+- **Content-Type**: `application/x-www-form-urlencoded`
+- **Payload**: `email=operator%40urja.local&password=urja-ops-2026`
+- **Gotcha**: SvelteKit strictly validates the `Origin` header on POST form submissions. If you omit `Origin: https://urja-ops.flockenergy.tech`, you get:
   ```
-  __Secure-better-auth.session_token=<token>; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax
+  403 Forbidden: Cross-site POST form submissions are forbidden
   ```
-- **TTL:** 1 hour (3600 seconds)
-- The cookie is `HttpOnly` and `Secure` — it cannot be read by client-side JavaScript and is only sent over HTTPS.
-- Session details can be queried at `GET /api/auth/get-session`, which returns:
-  ```json
-  {
-    "session": { "expiresAt": "...", "token": "...", "userId": "...", "id": "..." },
-    "user": { "name": "Ops Desk", "email": "operator@urja.local", ... }
+
+### Session Cookie
+On valid credentials, the server returns a session cookie:
+```
+__Secure-better-auth.session_token=<token>; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+- **TTL**: 1 hour (3600 seconds).
+- It's marked `HttpOnly` and `Secure`, so client JS never touches the raw cookie value directly; the browser passes it automatically with requests.
+
+### Checking Session State
+You can verify the session anytime via:
+```
+GET /api/auth/get-session
+```
+Returns:
+```json
+{
+  "session": {
+    "id": "...",
+    "token": "...",
+    "userId": "...",
+    "expiresAt": "2026-10-27T17:57:28.164Z"
+  },
+  "user": {
+    "id": "...",
+    "name": "Ops Desk",
+    "email": "operator@urja.local"
   }
-  ```
+}
+```
 
-### Sign Out
-
-- **Endpoint:** `POST /api/auth/sign-out`
-- Invalidates the session server-side.
-
-### Unauthenticated Requests
-
-- All `/portal/*` endpoints return `401`:
-  ```json
-  {"error": "unauthorized", "message": "A valid session is required."}
-  ```
+Any `/portal/*` endpoint hit without this cookie returns `401 Unauthorized`:
+```json
+{"error": "unauthorized", "message": "A valid session is required."}
+```
 
 ---
 
-## Data Endpoints
+## 3. Discovered Endpoints
 
-All data endpoints are under the `/portal/` path and return JSON. They require a valid session cookie.
+All data endpoints require the session cookie.
 
-### 1. Meter Search / List
-
+### 1. Meter Search & List
 ```
 GET /portal/meters/search?q={query}&page={page}
 ```
-
-- **Search scope:** Matches against `meterId` and `serialNo` only (not make, status, or other fields)
-- **Pagination:** 20 items per page
-- **Empty query:** Returns all meters
-- **Response:**
+- **Pagination**: 20 meters per page.
+- **Search behavior**: Matches against `meterId` and `serialNo`. It ignores make, phase, or status.
+- An empty query (`q=`) lists meters in order.
+- Response payload:
   ```json
   {
     "data": [
@@ -87,34 +93,25 @@ GET /portal/meters/search?q={query}&page={page}
   ```
 
 ### 2. Distribution Transformers
-
 ```
 GET /portal/dts?page={page}
 ```
-
-- **Pagination:** 20 items per page (40 total DTs = 2 pages)
-- **Response:**
+- **Pagination**: 20 items per page (40 DTs total across 2 pages).
+- Sample item:
   ```json
   {
-    "data": [
-      {
-        "code": "DT-001",
-        "name": "Malviya Nagar DT 1",
-        "feederCode": "F-001",
-        "capacityKva": 100
-      }
-    ],
-    "total": 40
+    "code": "DT-001",
+    "name": "Malviya Nagar DT 1",
+    "feederCode": "F-001",
+    "capacityKva": 100
   }
   ```
 
 ### 3. Meter Geolocation
-
 ```
 GET /portal/meters/{meterId}/geo
 ```
-
-- **Response:**
+- Returns coordinates for a specific meter:
   ```json
   {
     "data": {
@@ -123,40 +120,32 @@ GET /portal/meters/{meterId}/geo
     }
   }
   ```
-- **Quirk:** Coordinates are returned as **strings**, not numbers.
+- *Note*: Both latitude and longitude are returned as string values, not numbers.
 
-### 4. Meter Energy / Consumption
-
+### 4. Meter Energy / Interval Consumption
 ```
 GET /portal/meters/{meterId}/energy
 ```
-
-- **Returns:** ~337 readings per meter (approximately 7 days of 30-minute intervals)
-- **Response:**
+- Returns ~337 interval readings (about 7 days of 30-minute blocks).
+- Sample item:
   ```json
   {
-    "data": [
-      {
-        "timestamp": "23/06/2026 23:30",
-        "kwh": "48438.74",
-        "kvah": "52313.84",
-        "voltR": "226"
-      }
-    ]
+    "timestamp": "23/06/2026 23:30",
+    "kwh": "48438.74",
+    "kvah": "52313.84",
+    "voltR": "226"
   }
   ```
-- **Quirks:**
-  - Timestamps are in `DD/MM/YYYY HH:mm` format (non-ISO)
-  - All numeric values (`kwh`, `kvah`, `voltR`) are **strings**
-  - Values represent **cumulative** readings, not interval deltas
+- *Notes*:
+  - Timestamps use `DD/MM/YYYY HH:mm` (non-standard format without timezone).
+  - `kwh`, `kvah`, and `voltR` are strings.
+  - The values represent cumulative meter register readings, not consumption deltas for each interval.
 
 ### 5. Signing Secret
-
 ```
 GET /portal/keys
 ```
-
-- Returns the HMAC signing secret used for the export endpoint:
+- Returns a secret string used to sign requests for the bulk export:
   ```json
   {
     "data": {
@@ -165,75 +154,74 @@ GET /portal/keys
   }
   ```
 
-### 6. Bulk Export (HMAC-Signed)
-
+### 6. Bulk Export (HMAC Signed)
 ```
 GET /portal/export?page=1
 ```
+In the portal UI, there is an "Export all meters" button located on the Transformers page (`/transformers`). Clicking it fires a request with two mandatory headers:
+- `x-timestamp`: Current Unix timestamp in seconds (e.g. `1761584846`).
+- `x-signature`: HMAC-SHA256 hex digest of the request string.
 
-**Requires HMAC signature in headers:**
-
-| Header | Value |
-|---|---|
-| `x-timestamp` | Current Unix timestamp (seconds) |
-| `x-signature` | HMAC-SHA256 hex digest |
-
-**Signing algorithm** (reconstructed from client JS):
+#### How the signature is constructed:
+Looking into the client chunk `_app/immutable/nodes/4.2Bgc2kUI.js`, the signing function builds a plain text string separated by newlines:
 ```
-message = "GET\n/portal/export\npage=1\n{timestamp}"
-signature = HMAC-SHA256(signingSecret, message).hexdigest()
+METHOD\nPATH\nQUERY\nTIMESTAMP
+```
+For `GET /portal/export?page=1` at timestamp `1761584846`, the message is:
+```
+GET\n/portal/export\npage=1\n1761584846
+```
+The client then computes `HMAC-SHA256(secret, message)`. In Python:
+```python
+import hmac, hashlib
+
+message = f"GET\n/portal/export\npage=1\n{timestamp}"
+signature = hmac.new(
+    secret.encode("utf-8"),
+    message.encode("utf-8"),
+    hashlib.sha256
+).hexdigest()
 ```
 
-The signing is computed in the browser using the Web Crypto API (`crypto.subtle`).
-
-- **Despite the `page` parameter**, this endpoint returns **all 403 meters** in a single response.
-- **Response** includes enriched data not available in the search endpoint:
-  ```json
-  {
-    "data": [
-      {
-        "meterId": "J100000",
-        "serialNo": "SE33962",
-        "make": "HPL",
-        "phaseType": "single",
-        "installStatus": "Decommissioned",
-        "installType": "Whole Current",
-        "build": "legacy",
-        "dtCode": "DT-001",
-        "hierarchy": {
-          "zone": { "name": "Jaipur Zone 1", "code": "Z-01" },
-          "circle": { "name": "Circle 1", "code": "C-01" },
-          "division": { "name": "Division 1", "code": "D-01" },
-          "subdivision": { "name": "Subdivision 1", "code": "SD-01" },
-          "substation": { "name": "Substation 1", "code": "SS-01" },
-          "feeder": { "name": "Feeder 1", "code": "F-001" },
-          "dt": { "name": "Malviya Nagar DT 1", "code": "DT-001" }
-        },
-        "geo": { "lat": 26.938961, "lng": 75.830957 }
-      }
-    ],
-    "total": 403
-  }
-  ```
+#### Export Payload Details:
+Even though the request includes `page=1`, the endpoint returns **all 403 meters** at once. Each record contains full hierarchy and geo data:
+```json
+{
+  "meterId": "J100000",
+  "serialNo": "SE33962",
+  "make": "HPL",
+  "phaseType": "single",
+  "installStatus": "Decommissioned",
+  "installType": "Whole Current",
+  "build": "legacy",
+  "dtCode": "DT-001",
+  "hierarchy": {
+    "zone": { "name": "Jaipur Zone 1", "code": "Z-01" },
+    "circle": { "name": "Circle 1", "code": "C-01" },
+    "division": { "name": "Division 1", "code": "D-01" },
+    "subdivision": { "name": "Subdivision 1", "code": "SD-01" },
+    "substation": { "name": "Substation 1", "code": "SS-01" },
+    "feeder": { "name": "Feeder 1", "code": "F-001" },
+    "dt": { "name": "Malviya Nagar DT 1", "code": "DT-001" }
+  },
+  "geo": { "lat": 26.938961, "lng": 75.830957 }
+}
+```
 
 ---
 
-## SvelteKit Server-Load Data
+## 4. Single Meter Data & SvelteKit SSR
 
-Individual meter detail pages use SvelteKit's server-load pattern:
-
+When viewing a meter detail page (`/meters/[id]`), the frontend does not hit `/portal/meters/{id}`. Instead, it pulls SvelteKit's route-level loader:
 ```
 GET /meters/{meterId}/__data.json
 ```
+This file uses SvelteKit's positional encoding format (an array of nodes where objects point to array indices).
 
-This returns data in SvelteKit's compact positional encoding, where objects reference values by index in a flat array. The data includes:
+Once decoded, meter details have two completely different formats depending on the `build` property:
 
-- **Nameplate parameters** (in two formats based on `build` type)
-- **Network hierarchy** (Zone through DT)
-
-### Two Meter Data Formats
-
-**Legacy format** (`build: "legacy"`, 238 meters):
+### Format A: Legacy (`build: "legacy"` — 238 meters)
+Attributes are stored as an array of key-value pairs:
 ```json
 {
   "data": [
@@ -247,80 +235,46 @@ This returns data in SvelteKit's compact positional encoding, where objects refe
 }
 ```
 
-**V2 format** (`build: "v2"`, 165 meters):
+### Format B: V2 (`build: "v2"` — 165 meters)
+Attributes are stored inside a stringified JSON blob under `classData`:
 ```json
 {
   "classData": "{\"installed_meter\":{\"MeterId\":\"J100004\",\"SerialNo\":\"SE65293\",\"Make\":\"Genus\",\"PhaseType\":\"single\",\"InstallationStatus\":\"Faulty\",\"InstallationType\":\"CT Operated\"}}"
 }
 ```
-
-Note: The `classData` value is a **JSON string inside JSON** — it must be double-parsed.
-
----
-
-## Route Map
-
-Discovered from the SvelteKit client manifest:
-
-| Route | Node IDs | Purpose |
-|---|---|---|
-| `/` | — | Redirects to `/login` (or `/meters` if authenticated) |
-| `/login` | [0, 7] | Login form |
-| `/(portal)/meters` | [0, 2, 5] | Meter search/list page |
-| `/(portal)/meters/[id]` | [0, 2, 6] | Individual meter detail page |
-| `/(portal)/transformers` | [0, 2, 4] | Distribution transformers page |
-
-Node 0 = root layout, Node 2 = portal layout (nav bar, sign-out), others = page components.
+*Note*: `classData` must be parsed a second time with `json.loads` to get the actual meter attributes.
 
 ---
 
-## Data Summary
+## 5. Network Hierarchy Breakdown
 
-| Entity | Count | Notes |
-|---|---|---|
-| **Meters** | 403 | Across 3 zones, 40 DTs |
-| **DTs** | 40 | 2 pages of 20 |
-| **Zones** | 3 | Jaipur Zone 1, 2, 3 |
-| **Manufacturers** | 5 | HPL (90), L&T (64), Genus (88), Allied (76), Secure (85) |
-| **Statuses** | 3 | Installed (238), Faulty (90), Decommissioned (75) |
-| **Phase Types** | 2 | Single (277), Three (126) |
-| **Install Types** | 2 | Whole Current (205), CT Operated (198) |
-| **Build Types** | 2 | Legacy (238), V2 (165) |
-
----
-
-## Network Hierarchy (7 levels)
-
+The portal groups all meters under a 7-tier distribution hierarchy:
 ```
 Zone
  └── Circle
       └── Division
            └── Subdivision
-                └── Sub Station
+                └── Substation
                      └── Feeder
-                          └── DT (Distribution Transformer)
+                          └── Distribution Transformer (DT)
                                └── Meters
 ```
 
-Each meter belongs to exactly one DT, which sits in a chain up to a Zone.
+From analyzing the full export:
+- 403 total meters across 3 Zones (Jaipur Zone 1, 2, and 3).
+- 40 Distribution Transformers.
+- 5 Manufacturers: HPL (90), Genus (88), Secure (85), Allied (76), L&T (64).
+- 3 Installation Statuses: Installed (238), Faulty (90), Decommissioned (75).
+- 2 Phases: Single (277), Three (126).
+- 2 Build Types: Legacy (238), V2 (165).
 
 ---
 
-## Quirks and Surprises
+## 6. Key Quirks & Implementation Notes
 
-1. **CSRF via Origin header** — SvelteKit rejects POST requests without a matching `Origin` header (returns 403 with "Cross-site POST form submissions are forbidden").
-
-2. **Two data formats in the same system** — legacy meters use flat key-value arrays while v2 meters use stringified JSON (`classData`). The client-side JS handles both in a single component.
-
-3. **Export returns all data at once** — despite accepting a `page` parameter, the export endpoint ignores pagination and returns all 403 meters. This is actually convenient for bulk access.
-
-4. **Strings everywhere** — geo coordinates, energy readings (kwh, kvah, voltR) are all returned as strings, requiring type conversion.
-
-5. **Non-standard timestamp format** — energy readings use `DD/MM/YYYY HH:mm` instead of ISO-8601.
-
-6. **The signing secret is fetchable** — the HMAC secret for the export endpoint is available at `/portal/keys` to any authenticated user. The HMAC signing provides request integrity (preventing tampering) but not access control (which is handled by the session cookie).
-
-7. **No rate limiting** — no observable rate limits on any endpoint during testing.
-
-8. **The "Export all meters" button is on the Transformers page** — an unusual UX choice; you'd expect it on the Meters page.
-
+1. **Origin Header on Login**: Standard `curl -X POST` fails with 403 unless `Origin: https://urja-ops.flockenergy.tech` is passed.
+2. **Double JSON in V2**: V2 meters have JSON embedded as an escaped string inside JSON. The parser must check for `classData` and decode it conditionally.
+3. **Strings instead of Floats**: Geo coordinates (`latitude`, `longitude`) and power numbers (`kwh`, `kvah`) come back as string values.
+4. **Timestamp Format**: The energy series uses `DD/MM/YYYY HH:mm` rather than ISO-8601.
+5. **HMAC Key Exposure**: The signing key is publicly retrievable via `/portal/keys` once authenticated. It acts as an integrity check against URL tampering rather than an access secret.
+6. **Export Location**: In the portal UI, the export button is placed on `/transformers` rather than the meters page.
