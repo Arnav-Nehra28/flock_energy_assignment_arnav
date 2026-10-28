@@ -63,36 +63,50 @@ All 17 unit and integration tests hit the local models, cache logic, parsers, HM
 
 ---
 
-## How It Works
+## Teammate Handover & Architecture Guide
+
+If you're picking up this codebase to fix a bug or add a feature, here is the mental model:
+
+### Request Lifecycle
 
 ```
  Client (cURL / Frontend / Pipeline)
                  │
                  ▼
-       FastAPI API Service
-   ├── /api/meters (search, details, geo, consumption)
-   ├── /api/meters/export (HMAC bulk fetch + local filtering)
-   ├── /api/transformers (DT listings)
-   └── /api/hierarchy (reconstructed 7-level tree)
+       FastAPI API Routers (app/routers/)
+   ├── meters.py (search, single meter, consumption, export)
+   ├── transformers.py (transformer list)
+   └── hierarchy.py (7-level grid tree)
                  │
                  ▼
-          In-Memory Cache (TTL)
+       Service Layer (app/services/)
+   ├── cache.py (in-memory TTL cache with key invalidation)
+   ├── meter_service.py (schema normalization, tree building, filtering)
+   └── transformer_service.py (DT pagination)
                  │
                  ▼
-          Portal Client
-   ├── Better-Auth session + Origin CSRF header
-   ├── HMAC-SHA256 signature generator
+       Portal Client (app/portal_client.py)
+   ├── Better-Auth session + Origin header for CSRF
+   ├── HMAC-SHA256 signer using secret from /portal/keys
    └── SvelteKit __data.json positional decoder
                  │
                  ▼
   Urja Meter Ops (https://urja-ops.flockenergy.tech)
 ```
 
-1. **Session & Auth Management**: Automatically signs in with `operator@urja.local`, tracks the 1-hour session cookie, attaches the required `Origin` header to bypass SvelteKit CSRF checks, and re-authenticates if a request hits a 401.
-2. **HMAC Signing for Bulk Export**: The portal's "Export all meters" endpoint requires an HMAC-SHA256 signature generated from a dynamic key pulled from `/portal/keys`. The client generates the timestamped signature on the fly to download the full 403-meter dataset.
-3. **Schema Normalization**: Meter details in the portal come in two flavours: legacy meters use flat parameter arrays, while v2 meters store details inside a stringified JSON blob in `classData`. Both are normalized into a single consistent Pydantic model (`MeterDetailResponse`).
-4. **Data Type Fixes**: Coordinates and cumulative kWh/kVAh values returned by the portal as strings are cast to proper floats, and `DD/MM/YYYY HH:mm` timestamps are converted into ISO-8601.
-5. **Network Hierarchy**: Walks the metadata for all meters to reconstruct the full 7-level grid hierarchy (`Zone -> Circle -> Division -> Subdivision -> Substation -> Feeder -> DT -> Meters`) with live meter counts.
+### "Which file do I edit?" Cheat Sheet
+
+- **Adding or modifying an API endpoint**: Check `app/routers/` and define the response schema in `app/models.py`.
+- **Portal changed its auth or signing mechanism**: Look at `app/portal_client.py` (`login()`, `_sign_request()`).
+- **Found a new meter data format or want to calculate consumption deltas**: Look at `app/services/meter_service.py` (`_normalise_nameplate()`, `get_meter_consumption()`).
+- **Adjusting cache durations or swapping cache backend**: Check `app/config.py` (TTL constants) and `app/services/cache.py` (replace with Redis if scaling horizontally).
+- **Adding unit or integration tests**: Add cases to `tests/test_units.py` (offline, pure functions) or `tests/test_api.py` (FastAPI test client against live portal).
+
+### 3 Quirks You Need to Know
+
+1. **SvelteKit CSRF (`Origin` header)**: The portal rejects form POSTs unless `Origin: https://urja-ops.flockenergy.tech` is present. If you ever rewrite login requests or make direct calls, don't forget this header or you'll get a silent 403.
+2. **HMAC Signing Format**: Bulk export requires signing `METHOD\nPATH\nQUERY\nTIMESTAMP` using the secret from `/portal/keys`. The signature is passed in `x-signature` alongside `x-timestamp`.
+3. **Polymorphic Meter Schemas**: Old meters (`build: "legacy"`) store attributes in an array of `{parameterName, parameterValue}`. Newer meters (`build: "v2"`) store them inside an escaped JSON string under `classData`. `meter_service.py` handles both transparently.
 
 ---
 
