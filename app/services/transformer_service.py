@@ -15,9 +15,8 @@ PAGE_SIZE = 20
 async def list_transformers(page: int = 1) -> PaginatedResponse:
     """List distribution transformers with pagination."""
     cache_key = f"dts:page:{page}"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
+    if cache.has(cache_key):
+        return cache.get(cache_key)
 
     raw = await portal_client.list_transformers(page=page)
     total = raw.get("total", 0)
@@ -37,16 +36,13 @@ async def list_transformers(page: int = 1) -> PaginatedResponse:
 async def get_all_transformers() -> list[dict]:
     """Fetch all transformers across all pages."""
     cache_key = "dts:all"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
+    if cache.has(cache_key):
+        return cache.get(cache_key)
 
-    # First page to get total
     first_page = await portal_client.list_transformers(page=1)
     total = first_page.get("total", 0)
     all_dts = list(first_page.get("data", []))
 
-    # Fetch remaining pages
     total_pages = max(1, math.ceil(total / PAGE_SIZE))
     for page in range(2, total_pages + 1):
         page_data = await portal_client.list_transformers(page=page)
@@ -55,4 +51,3 @@ async def get_all_transformers() -> list[dict]:
     result = [Transformer(**dt).model_dump() for dt in all_dts]
     cache.set(cache_key, result, settings.cache_ttl_seconds)
     return result
-

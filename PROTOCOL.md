@@ -145,14 +145,15 @@ GET /portal/meters/{meterId}/energy
 ```
 GET /portal/keys
 ```
-- Returns a secret string used to sign requests for the bulk export:
+- Returns the signing secret required to sign bulk export requests:
   ```json
   {
     "data": {
-      "signingSecret": "I3dZPPf5CgTp7JyGNMI8i6z8LFR7TmSR"
+      "signingSecret": "<signing-secret-token>"
     }
   }
   ```
+  The secret is fetched dynamically by client code before exporting and passed to the WebCrypto signing routine.
 
 ### 6. Bulk Export (HMAC Signed)
 ```
@@ -278,3 +279,4 @@ From analyzing the full export:
 4. **Timestamp Format**: The energy series uses `DD/MM/YYYY HH:mm` rather than ISO-8601.
 5. **HMAC Key Exposure**: The signing key is publicly retrievable via `/portal/keys` once authenticated. It acts as an integrity check against URL tampering rather than an access secret.
 6. **Export Location**: In the portal UI, the export button is placed on `/transformers` rather than the meters page.
+7. **Coupling Limitations**: Single meter detail currently uses `/__data.json`. Because SvelteKit positional arrays are internal framework details, our parser includes bounds validation and circular reference guards, with graceful error mapping if the schema drifts. Fleet statistics cited above reflect observations taken during portal inspection.

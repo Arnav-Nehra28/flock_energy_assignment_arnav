@@ -52,6 +52,12 @@
               }
             }
           },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -170,9 +176,17 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResponse"
+                }
               }
             }
+          },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
           },
           "422": {
             "description": "Validation Error",
@@ -217,6 +231,15 @@
               }
             }
           },
+          "404": {
+            "description": "Meter not found"
+          },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -260,6 +283,15 @@
               }
             }
           },
+          "404": {
+            "description": "Meter or location not found"
+          },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -279,7 +311,7 @@
           "Meters"
         ],
         "summary": "Get meter consumption readings",
-        "description": "Returns 30-minute interval energy readings for a meter. Includes cumulative kWh, kVAh, and R-phase voltage. Timestamps are normalised to ISO-8601 format.",
+        "description": "Returns 30-minute interval energy readings for a meter. Includes cumulative kWh, kVAh, and R-phase voltage. Timestamps are normalised to ISO-8601 format with IST (+05:30) offset.",
         "operationId": "get_meter_consumption_api_meters__meter_id__consumption_get",
         "parameters": [
           {
@@ -306,6 +338,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Meter not found or no consumption data"
+          },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
           },
           "422": {
             "description": "Validation Error",
@@ -354,6 +395,12 @@
               }
             }
           },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -380,9 +427,17 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransformerListResponse"
+                }
               }
             }
+          },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
           }
         }
       }
@@ -393,7 +448,7 @@
           "Hierarchy"
         ],
         "summary": "Get network hierarchy tree",
-        "description": "Returns the full network hierarchy reconstructed from meter data: Zone \u2192 Circle \u2192 Division \u2192 Subdivision \u2192 Substation \u2192 Feeder \u2192 DT. Each node includes a meter count.",
+        "description": "Returns the full network hierarchy reconstructed from meter data: Zone -> Circle -> Division -> Subdivision -> Substation -> Feeder -> DT. Each node includes a meter count.",
         "operationId": "get_hierarchy_api_hierarchy_get",
         "responses": {
           "200": {
@@ -409,6 +464,12 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Portal returned an error or is unreachable"
+          },
+          "503": {
+            "description": "Portal authentication failed"
           }
         }
       }
@@ -461,7 +522,7 @@
           "timestamp": {
             "type": "string",
             "title": "Timestamp",
-            "description": "ISO-8601 timestamp (converted from DD/MM/YYYY HH:mm)"
+            "description": "ISO-8601 timestamp with IST offset (+05:30)"
           },
           "kwh": {
             "anyOf": [
@@ -506,6 +567,28 @@
         ],
         "title": "EnergyReading",
         "description": "A single 30-minute consumption reading."
+      },
+      "ExportResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "total"
+        ],
+        "title": "ExportResponse",
+        "description": "Bulk export response envelope."
       },
       "GeoLocation": {
         "properties": {
@@ -630,7 +713,7 @@
           "hierarchy"
         ],
         "title": "MeterDetail",
-        "description": "Full meter detail: nameplate, hierarchy, location, and optional\nconsumption summary."
+        "description": "Full meter detail: nameplate, hierarchy, and location."
       },
       "MeterHierarchy": {
         "properties": {
@@ -711,7 +794,9 @@
       "PaginatedResponse": {
         "properties": {
           "data": {
-            "items": {},
+            "items": {
+              "type": "object"
+            },
             "type": "array",
             "title": "Data"
           },
@@ -742,6 +827,28 @@
         ],
         "title": "PaginatedResponse",
         "description": "Paginated API response envelope."
+      },
+      "TransformerListResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "total"
+        ],
+        "title": "TransformerListResponse",
+        "description": "All-transformers response envelope."
       },
       "ValidationError": {
         "properties": {

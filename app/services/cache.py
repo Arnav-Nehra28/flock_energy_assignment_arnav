@@ -9,6 +9,8 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
+_MISSING = object()
+
 
 class TTLCache:
     """Lightweight in-memory key→value cache with per-entry TTL."""
@@ -17,20 +19,29 @@ class TTLCache:
         self._store: dict[str, tuple[float, Any]] = {}
         self._default_ttl = default_ttl
 
-    def get(self, key: str) -> Optional[Any]:
-        """Return cached value if present and not expired, else None."""
+    def get(self, key: str, default: Any = None) -> Any:
+        """Return cached value if present and not expired, else default."""
         entry = self._store.get(key)
         if entry is None:
-            return None
+            return default
         expires_at, value = entry
         if time.time() > expires_at:
             del self._store[key]
-            return None
+            return default
         return value
 
+    def has(self, key: str) -> bool:
+        """Check if a non-expired entry exists for key."""
+        val = self.get(key, _MISSING)
+        return val is not _MISSING
+
     def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        """Store a value with the given TTL (seconds)."""
-        self._store[key] = (time.time() + (ttl or self._default_ttl), value)
+        """Store a value with the given TTL (seconds).
+
+        Respects ttl=0 (expires immediately) and uses default_ttl only if ttl is None.
+        """
+        effective_ttl = self._default_ttl if ttl is None else ttl
+        self._store[key] = (time.time() + effective_ttl, value)
 
     def invalidate(self, prefix: str = "") -> int:
         """Remove entries whose key starts with *prefix*. Returns count removed."""
@@ -50,4 +61,3 @@ class TTLCache:
 
 # Module-level singleton
 cache = TTLCache()
-

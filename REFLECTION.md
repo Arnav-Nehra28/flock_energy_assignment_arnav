@@ -8,8 +8,8 @@ My notes and answers to the assignment reflection prompts.
 
 1. **Read-only access**: The prompt specified treating the portal as read-only. I assumed meter operational data changes relatively slowly, so caching lists and bulk snapshots for 5 to 10 minutes in memory is a sensible balance between freshness and load on the legacy portal.
 2. **Bulk export as the source of truth**: Calling `GET /portal/export?page=1` dumps all 403 meters in a single JSON payload despite accepting a `page` query parameter. I assumed this bulk snapshot was intended to be the primary dataset for fleet sync, filtering, and hierarchy building, rather than crawling the search endpoint 20 items at a time.
-3. **Session handling**: The `__Secure-better-auth.session_token` cookie has a 1-hour `Max-Age`. I assumed tracking token age locally with a small buffer, plus catching any unexpected 401s to trigger a transparent re-login, is sufficient for continuous background uptime.
-4. **Timezone**: Energy readings use `DD/MM/YYYY HH:mm` with no timezone specified. Since the meters are in the Jaipur area, I parsed timestamps assuming Indian Standard Time (IST).
+3. **Session handling**: The `__Secure-better-auth.session_token` cookie has a 1-hour `Max-Age`. To prevent multiple concurrent incoming requests from stamping the login endpoint simultaneously when a token expires, I serialized auth behind an `asyncio.Lock` and added a bounded single re-auth retry on 401s.
+4. **Timezone**: Energy readings use `DD/MM/YYYY HH:mm` with no timezone specified. Since the meters are in the Jaipur area, I converted timestamps into explicit timezone-aware ISO-8601 strings with an Indian Standard Time offset (`+05:30`), e.g. `2026-06-24T14:30:00+05:30`.
 
 ---
 

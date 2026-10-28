@@ -2,37 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-
-
-# ── Enums ──────────────────────────────────────────────────────────────
-
-class PhaseType(str, Enum):
-    single = "single"
-    three = "three"
-
-
-class InstallStatus(str, Enum):
-    installed = "Installed"
-    faulty = "Faulty"
-    decommissioned = "Decommissioned"
-
-
-class InstallType(str, Enum):
-    whole_current = "Whole Current"
-    ct_operated = "CT Operated"
-
-
-class Make(str, Enum):
-    hpl = "HPL"
-    l_and_t = "L&T"
-    genus = "Genus"
-    allied = "Allied"
-    secure = "Secure"
 
 
 # ── Hierarchy ──────────────────────────────────────────────────────────
@@ -69,8 +41,8 @@ class MeterSummary(BaseModel):
     meter_id: str = Field(..., alias="meterId", description="Unique meter identifier, e.g. J100000")
     serial_no: str = Field(..., alias="serialNo")
     make: str
-    phase_type: PhaseType = Field(..., alias="phaseType")
-    install_status: InstallStatus = Field(..., alias="installStatus")
+    phase_type: str = Field(..., alias="phaseType")
+    install_status: str = Field(..., alias="installStatus")
     dt_code: str = Field(..., alias="dtCode")
 
     model_config = {"populate_by_name": True}
@@ -88,8 +60,7 @@ class MeterNameplate(BaseModel):
 
 
 class MeterDetail(BaseModel):
-    """Full meter detail: nameplate, hierarchy, location, and optional
-    consumption summary."""
+    """Full meter detail: nameplate, hierarchy, and location."""
     meter_id: str
     nameplate: MeterNameplate
     hierarchy: MeterHierarchy
@@ -101,13 +72,13 @@ class MeterExport(BaseModel):
     meter_id: str = Field(..., alias="meterId")
     serial_no: str = Field(..., alias="serialNo")
     make: str
-    phase_type: PhaseType = Field(..., alias="phaseType")
-    install_status: InstallStatus = Field(..., alias="installStatus")
-    install_type: InstallType = Field(..., alias="installType")
+    phase_type: str = Field(..., alias="phaseType")
+    install_status: str = Field(..., alias="installStatus")
+    install_type: str = Field(..., alias="installType")
     build: str
     dt_code: str = Field(..., alias="dtCode")
     hierarchy: MeterHierarchy
-    location: Optional[GeoLocation] = Field(None, alias="geo")
+    location: Optional[GeoLocation] = None
 
     model_config = {"populate_by_name": True}
 
@@ -128,21 +99,33 @@ class Transformer(BaseModel):
 
 class EnergyReading(BaseModel):
     """A single 30-minute consumption reading."""
-    timestamp: str = Field(..., description="ISO-8601 timestamp (converted from DD/MM/YYYY HH:mm)")
+    timestamp: str = Field(..., description="ISO-8601 timestamp with IST offset (+05:30)")
     kwh: Optional[float] = Field(None, description="Cumulative active energy (kWh)")
     kvah: Optional[float] = Field(None, description="Cumulative apparent energy (kVAh)")
     volt_r: Optional[int] = Field(None, description="R-phase voltage (V)")
 
 
-# ── Paginated wrapper ─────────────────────────────────────────────────
+# ── Response envelopes ────────────────────────────────────────────────
 
 class PaginatedResponse(BaseModel):
     """Paginated API response envelope."""
-    data: list
+    data: list[dict[str, Any]]
     total: int
     page: int
     page_size: int
     total_pages: int
+
+
+class ExportResponse(BaseModel):
+    """Bulk export response envelope."""
+    data: list[dict[str, Any]]
+    total: int
+
+
+class TransformerListResponse(BaseModel):
+    """All-transformers response envelope."""
+    data: list[dict[str, Any]]
+    total: int
 
 
 # ── Hierarchy tree ─────────────────────────────────────────────────────
@@ -154,4 +137,3 @@ class HierarchyTreeNode(BaseModel):
     level: str
     children: list[HierarchyTreeNode] = Field(default_factory=list)
     meter_count: Optional[int] = None
-

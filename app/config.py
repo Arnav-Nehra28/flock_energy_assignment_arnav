@@ -6,10 +6,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration loaded from environment / .env file."""
 
-    # Portal connection
+    # Portal connection — must be configured via environment or .env
     portal_base_url: str = "https://urja-ops.flockenergy.tech"
-    portal_email: str = "operator@urja.local"
-    portal_password: str = "urja-ops-2026"
+    portal_email: str
+    portal_password: str
 
     # Cache settings
     cache_ttl_seconds: int = 300  # 5 minutes for list/search data
@@ -28,4 +28,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
