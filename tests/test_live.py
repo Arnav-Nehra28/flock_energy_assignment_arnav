@@ -49,3 +49,4 @@ async def test_live_export(client):
     assert res.status_code == 200
     data = res.json()
     assert data["total"] > 0
+

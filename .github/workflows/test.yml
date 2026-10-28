@@ -29,3 +29,4 @@ jobs:
           URJA_PORTAL_PASSWORD: test-password
         run: |
           pytest -v
+
